@@ -19,3 +19,5 @@ crate-type = ["staticlib"]
 
 # [patch.'https://github.com/guidance-ai/llguidance']
 # llguidance = { path = "../llguidance/parser" }
+
+[workspace]
