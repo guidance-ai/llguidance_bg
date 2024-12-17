@@ -6,3 +6,4 @@ and adds ability to compute masks in background thread, as well as exposes addit
 The build process for this crate creates the following files in `target/release`:
 - `libllguidance_bg.a` - the static library to be linked into C++
 - `llguidance.h` and `llguidance_bg.h` - the C header files to be included in C++ code
+- `llguidance_bg_cpp.h` - a C++ single-header wrapper around the C APIs
