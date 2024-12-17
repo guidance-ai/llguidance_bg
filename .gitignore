@@ -17,3 +17,5 @@ build
 .intentionally-empty-file.o
 perf.data
 perf.data.old
+*.dSYM
+cpp/test

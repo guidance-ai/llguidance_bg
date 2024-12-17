@@ -11,6 +11,16 @@ fn main() {
     config.usize_is_size_t = true; // not exposed as .with_*() method
 
     println!("cargo:rerun-if-changed=src/ffi.rs");
+    println!("cargo:rerun-if-changed=cpp/llguidance_bg_cpp.h");
+
+    std::fs::copy(
+        format!("{}/cpp/llguidance_bg_cpp.h", crate_dir),
+        format!(
+            "{}/../../../llguidance_bg_cpp.h",
+            env::var("OUT_DIR").unwrap()
+        ),
+    )
+    .expect("Failed to copy C++ header file");
 
     cbindgen::Builder::new()
         .with_config(config)
