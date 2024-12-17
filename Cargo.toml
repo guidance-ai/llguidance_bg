@@ -17,5 +17,5 @@ cbindgen = "0.27.0"
 crate-type = ["staticlib"]
 # crate-type = ["cdylib"]
 
-# [patch.'https://github.com/guidance-ai/llguidance']
-# llguidance = { path = "../../../src/guidance-ws/llguidance/parser" }
+[patch.'https://github.com/guidance-ai/llguidance']
+llguidance = { path = "../llguidance/parser" }

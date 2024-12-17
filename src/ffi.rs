@@ -3,6 +3,7 @@ use llguidance::{
     api::TopLevelGrammar,
     ffi::{LlgConstraintInit, LlgToken, LlgTokenizer},
     toktrie::SimpleVob,
+    ParserFactory,
 };
 use std::ffi::{c_char, c_void};
 
@@ -15,6 +16,7 @@ pub struct BllgConstraint {
 }
 
 pub struct BllgConstraintMgr {
+    factory: ParserFactory,
     init: LlgConstraintInit,
     tokenizer: LlgTokenizer,
 }
@@ -74,17 +76,41 @@ impl BllgConstraintMgr {
     fn new_constraint(&self, grammar_json: &[u8]) -> Result<BgConstraint> {
         let grammar: TopLevelGrammar = serde_json::from_slice(grammar_json)
             .map_err(|e| anyhow::anyhow!("Invalid JSON in grammar_json: {e}"))?;
-        let parser = self.init.build_parser(grammar, vec![])?;
+        let parser = self
+            .init
+            .build_parser_from_factory(&self.factory, grammar)?;
         Ok(BgConstraint::new(parser))
     }
 }
 
 /// Create a new constraint manager with given parameters.
 #[no_mangle]
-pub extern "C" fn bllg_new_constraint_mgr(init: &LlgConstraintInit) -> *mut BllgConstraintMgr {
+pub extern "C" fn bllg_new_constraint_mgr(
+    init: &LlgConstraintInit,
+    slicesv: *const *const c_char,
+) -> *mut BllgConstraintMgr {
+    let mut slices = vec![];
+    if slicesv.is_null() {
+        // default slice
+        slices.push(r#"[^"\\\x00-\x1F\x7F]{1,30}"#.to_string());
+    } else {
+        let mut idx = 0;
+        loop {
+            let slice = unsafe { *slicesv.add(idx) };
+            if slice.is_null() {
+                break;
+            }
+            let slice = unsafe { std::ffi::CStr::from_ptr(slice) };
+            slices.push(slice.to_str().unwrap().to_string());
+            idx += 1;
+        }
+    }
+
     let tokenizer = unsafe { &(*init.tokenizer) };
+
     let mut r = Box::new(BllgConstraintMgr {
         tokenizer: tokenizer.clone(),
+        factory: ParserFactory::new(&tokenizer.token_env, init.inference_capabilities(), &slices),
         init: init.clone(),
     });
     // we keep track of the tokenizer locally
