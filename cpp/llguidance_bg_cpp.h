@@ -62,8 +62,12 @@ public:
     auto n_vocab = cfg.n_vocab;
     LlgTokenizerInit init = {};
     init.vocab_size = n_vocab;
-    // we don't yet have the real tokenization function
-    init.use_approximate_greedy_tokenize_fn = true;
+
+    if (cfg.tokenize_fn) {
+      init.tokenize_fn = cfg.tokenize_fn;
+    } else {
+      init.use_approximate_greedy_tokenize_fn = true;
+    }
 
     // serialize tokens in format required by llguidance
     std::vector<uint8_t> token_bytes;
