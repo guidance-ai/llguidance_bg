@@ -1,4 +1,4 @@
-# LLGuidance BG
+# Background LLGuidance
 
 This wraps the crate [llguidance](https://github.com/microsoft/llguidance/tree/main/parser)
 and adds ability to compute masks in background thread, as well as exposes additional C APIs.
