@@ -234,7 +234,7 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 [[package]]
 name = "derivre"
 version = "0.1.0"
-source = "git+https://github.com/microsoft/derivre?rev=5cd57842ed6d2b64156b5d44f4d2094097855e44#5cd57842ed6d2b64156b5d44f4d2094097855e44"
+source = "git+https://github.com/microsoft/derivre?rev=a629ecc9dfbd9297bc3a35a5f2028f4bfce91060#a629ecc9dfbd9297bc3a35a5f2028f4bfce91060"
 dependencies = [
  "ahash",
  "anyhow",
@@ -591,7 +591,7 @@ checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 [[package]]
 name = "llguidance"
 version = "0.5.1"
-source = "git+https://github.com/guidance-ai/llguidance?rev=389755b23e3821a0489e9a13786b5f1882c6d955#389755b23e3821a0489e9a13786b5f1882c6d955"
+source = "git+https://github.com/guidance-ai/llguidance?rev=3e8873f1da7ac0f3cf1ea7a5636df8dce7ea11f5#3e8873f1da7ac0f3cf1ea7a5636df8dce7ea11f5"
 dependencies = [
  "anyhow",
  "cbindgen",
@@ -958,7 +958,7 @@ dependencies = [
 [[package]]
 name = "toktrie"
 version = "0.1.0"
-source = "git+https://github.com/guidance-ai/llguidance?rev=389755b23e3821a0489e9a13786b5f1882c6d955#389755b23e3821a0489e9a13786b5f1882c6d955"
+source = "git+https://github.com/guidance-ai/llguidance?rev=3e8873f1da7ac0f3cf1ea7a5636df8dce7ea11f5#3e8873f1da7ac0f3cf1ea7a5636df8dce7ea11f5"
 dependencies = [
  "anyhow",
  "bytemuck",

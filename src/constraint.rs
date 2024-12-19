@@ -42,6 +42,7 @@ struct ConstraintState {
     inner: Mutex<ConstraintInner>,
     condvar: Condvar,
     next_mask_ticket: AtomicI32,
+    thread_pool: Arc<rayon::ThreadPool>,
 }
 
 // There's Constraint type already in llguidance library
@@ -51,7 +52,7 @@ pub struct BgConstraint {
 }
 
 impl BgConstraint {
-    pub fn new(mut parser: TokenParser) -> Self {
+    pub fn new(thread_pool: Arc<rayon::ThreadPool>, mut parser: TokenParser) -> Self {
         parser.start_without_prompt();
         BgConstraint {
             state: Arc::new(ConstraintState {
@@ -63,6 +64,7 @@ impl BgConstraint {
                 }),
                 condvar: Condvar::new(),
                 next_mask_ticket: AtomicI32::new(1),
+                thread_pool,
             }),
         }
     }
@@ -104,7 +106,7 @@ impl BgConstraint {
         let ticket = MaskTicketId(self.state.next_mask_ticket.fetch_add(1, Ordering::Relaxed));
         // This is only so that we can call with_inner() from the closure.
         let self_copy = self.clone_ref();
-        rayon::spawn(move || {
+        self.state.thread_pool.spawn(move || {
             let _ignore = self_copy.with_inner(|inner| {
                 let mask = inner.parser.compute_mask()?;
                 cb.mask_ready(&mask);

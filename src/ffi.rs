@@ -1,11 +1,15 @@
 use anyhow::Result;
 use llguidance::{
     api::TopLevelGrammar,
+    earley::SlicedBiasComputer,
     ffi::{LlgConstraintInit, LlgToken, LlgTokenizer},
     toktrie::SimpleVob,
     ParserFactory,
 };
-use std::ffi::{c_char, c_void};
+use std::{
+    ffi::{c_char, c_void},
+    sync::Arc,
+};
 
 use crate::{constraint::MaskTicketId, BgConstraint, MaskCallback};
 
@@ -19,6 +23,7 @@ pub struct BllgConstraintMgr {
     factory: ParserFactory,
     init: LlgConstraintInit,
     tokenizer: LlgTokenizer,
+    thread_pool: Arc<rayon::ThreadPool>,
 }
 
 pub type BllgMaskReady = Option<
@@ -79,7 +84,7 @@ impl BllgConstraintMgr {
         let parser = self
             .init
             .build_parser_from_factory(&self.factory, grammar)?;
-        Ok(BgConstraint::new(parser))
+        Ok(BgConstraint::new(self.thread_pool.clone(), parser))
     }
 }
 
@@ -87,12 +92,15 @@ impl BllgConstraintMgr {
 #[no_mangle]
 pub extern "C" fn bllg_new_constraint_mgr(
     init: &LlgConstraintInit,
+    num_threads: usize,
     slicesv: *const *const c_char,
+    error_string: *mut c_char,
+    error_string_len: usize,
 ) -> *mut BllgConstraintMgr {
     let mut slices = vec![];
     if slicesv.is_null() {
         // default slice
-        slices.push(r#"[^"\\\x00-\x1F\x7F]{1,30}"#.to_string());
+        slices = SlicedBiasComputer::general_slices();
     } else {
         let mut idx = 0;
         loop {
@@ -108,14 +116,55 @@ pub extern "C" fn bllg_new_constraint_mgr(
 
     let tokenizer = unsafe { &(*init.tokenizer) };
 
-    let mut r = Box::new(BllgConstraintMgr {
-        tokenizer: tokenizer.clone(),
-        factory: ParserFactory::new(&tokenizer.token_env, init.inference_capabilities(), &slices),
-        init: init.clone(),
-    });
-    // we keep track of the tokenizer locally
-    r.init.tokenizer = &r.tokenizer;
-    Box::into_raw(r)
+    match BllgConstraintMgr::new(tokenizer, num_threads, init, slices) {
+        Ok(r) => {
+            // we keep track of the tokenizer locally
+            let mut r = Box::new(r);
+            r.init.tokenizer = &r.tokenizer;
+            Box::into_raw(r)
+        }
+        Err(e) => {
+            save_error(e.to_string(), error_string, error_string_len);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+impl BllgConstraintMgr {
+    fn new(
+        tokenizer: &LlgTokenizer,
+        num_threads: usize,
+        init: &LlgConstraintInit,
+        slices: Vec<String>,
+    ) -> Result<Self> {
+        let num_threads = if num_threads == 0 {
+            std::cmp::min(
+                20,
+                std::thread::available_parallelism()
+                    .map(|p| p.get())
+                    .unwrap_or(1),
+            )
+        } else {
+            num_threads
+        };
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to create thread pool with {num_threads} threads: {e}")
+            })?;
+
+        Ok(BllgConstraintMgr {
+            tokenizer: tokenizer.clone(),
+            factory: ParserFactory::new(
+                &tokenizer.token_env,
+                init.inference_capabilities(),
+                &slices,
+            )?,
+            init: init.clone(),
+            thread_pool: Arc::new(thread_pool),
+        })
+    }
 }
 
 /// Destroy the constraint manager.
@@ -153,6 +202,17 @@ pub extern "C" fn bllg_check_stop(cc: &BllgConstraint) -> bool {
     cc.constraint
         .as_ref()
         .map_or(true, |c| c.check_stop().unwrap_or(true))
+}
+
+fn save_error(e: String, error_string: *mut c_char, error_string_len: usize) {
+    if error_string_len > 1 {
+        let e = e.as_bytes();
+        let to_copy = std::cmp::min(e.len(), error_string_len - 1);
+        unsafe {
+            std::ptr::copy_nonoverlapping(e.as_ptr(), error_string as *mut u8, to_copy);
+            std::ptr::write(error_string.add(to_copy) as *mut u8, 0);
+        }
+    }
 }
 
 /// Set maximum number of threads (cores) to use for mask computation.

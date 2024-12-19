@@ -50,15 +50,6 @@ public:
 
     char error_string[1024];
 
-    if (cfg.num_threads > 0) {
-      int r = bllg_set_num_threads(cfg.num_threads, error_string,
-                                   sizeof(error_string));
-      if (r != 0) {
-        throw std::invalid_argument("Error setting number of threads: " +
-                                    std::string(error_string));
-      }
-    }
-
     auto n_vocab = cfg.n_vocab;
     LlgTokenizerInit init = {};
     init.vocab_size = n_vocab;
@@ -117,10 +108,12 @@ public:
     }
     slices.push_back(nullptr);
 
-    constraint_mgr = bllg_new_constraint_mgr(&cinit, slices.data());
+    constraint_mgr =
+        bllg_new_constraint_mgr(&cinit, cfg.num_threads, slices.data(),
+                                error_string, sizeof(error_string));
     if (constraint_mgr == nullptr) {
-      // shouldn't happen
-      throw std::invalid_argument("Error creating constraint manager");
+      throw std::invalid_argument("Error creating constraint manager: " +
+                                  std::string(error_string));
     }
   }
 
