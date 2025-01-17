@@ -21,9 +21,11 @@ struct ConstraintMgrConfig {
   size_t num_threads;
   LlgConstraintInit cinit;
   std::vector<std::string> slices;
+  bool tokenize_assumes_string;
 
   ConstraintMgrConfig(uint32_t n_vocab)
-      : n_vocab(n_vocab), tokenize_fn(nullptr), num_threads(0) {
+      : n_vocab(n_vocab), tokenize_fn(nullptr), num_threads(0),
+        tokenize_assumes_string(true) {
     llg_constraint_init_set_defaults(&cinit, nullptr);
   }
 };
@@ -53,6 +55,7 @@ public:
     auto n_vocab = cfg.n_vocab;
     LlgTokenizerInit init = {};
     init.vocab_size = n_vocab;
+    init.tokenize_assumes_string = cfg.tokenize_assumes_string;
 
     if (cfg.tokenize_fn) {
       init.tokenize_fn = cfg.tokenize_fn;
@@ -189,6 +192,47 @@ public:
 protected:
   LlgTokenizer *tokenizer;
   BllgConstraintMgr *constraint_mgr;
+  friend class StopController;
+};
+
+class StopController {
+public:
+  StopController(ConstraintMgr &mgr, std::vector<uint32_t> stop_tokens,
+                 std::optional<std::string> stop_rx = std::nullopt)
+      : stop_requested(false) {
+    char error_string[1024];
+    stop_controller = llg_new_stop_controller(
+        mgr.tokenizer, stop_tokens.data(), stop_tokens.size(),
+        stop_rx ? stop_rx->c_str() : nullptr, error_string,
+        sizeof(error_string));
+    if (stop_controller == nullptr) {
+      throw std::invalid_argument("Error creating stop controller: " +
+                                  std::string(error_string));
+    }
+  }
+
+  bool is_stopped() const { return stop_requested; }
+
+  std::string commit_token(uint32_t token) {
+    size_t output_len = 0;
+    const char *r = llg_stop_commit_token(stop_controller, token, &output_len,
+                                          &stop_requested);
+    if (r == nullptr) {
+      return "";
+    }
+    return std::string(r, output_len);
+  }
+
+  ~StopController() {
+    if (stop_controller != nullptr) {
+      llg_free_stop_controller(stop_controller);
+      stop_controller = nullptr;
+    }
+  }
+
+protected:
+  bool stop_requested;
+  LlgStopController *stop_controller;
 };
 
 } // namespace llguidance_bg
