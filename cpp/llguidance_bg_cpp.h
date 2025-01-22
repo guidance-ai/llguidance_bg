@@ -17,15 +17,19 @@ struct ConstraintMgrConfig {
   uint32_t n_vocab;
   std::string eos_token_name;
   std::function<std::vector<uint8_t>(uint32_t)> get_token_bytes;
+
   LlgTokenizeFn tokenize_fn;
-  size_t num_threads;
-  LlgConstraintInit cinit;
-  std::vector<std::string> slices;
+  void *tokenize_user_data;
   bool tokenize_assumes_string;
 
+  size_t num_threads;
+
+  LlgConstraintInit cinit;
+  std::vector<std::string> slices;
+
   ConstraintMgrConfig(uint32_t n_vocab)
-      : n_vocab(n_vocab), tokenize_fn(nullptr), num_threads(0),
-        tokenize_assumes_string(true) {
+      : n_vocab(n_vocab), tokenize_fn(nullptr), tokenize_user_data(nullptr),
+        num_threads(0), tokenize_assumes_string(true) {
     llg_constraint_init_set_defaults(&cinit, nullptr);
   }
 };
@@ -59,6 +63,7 @@ public:
 
     if (cfg.tokenize_fn) {
       init.tokenize_fn = cfg.tokenize_fn;
+      init.tokenize_user_data = cfg.tokenize_user_data;
     } else {
       init.use_approximate_greedy_tokenize_fn = true;
     }
