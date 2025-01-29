@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.93"
-llguidance = { git = "https://github.com/guidance-ai/llguidance", tag = "v0.6.9", default-features = false, features = ["lark"] }
+llguidance = { git = "https://github.com/guidance-ai/llguidance", tag = "v0.6.11", default-features = false, features = ["lark"] }
 rayon = "1.10.0"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.132"
@@ -19,5 +19,8 @@ crate-type = ["staticlib"]
 
 # [patch.'https://github.com/guidance-ai/llguidance']
 # llguidance = { path = "../llguidance/parser" }
+
+[profile.release]
+debug = 1
 
 [workspace]
