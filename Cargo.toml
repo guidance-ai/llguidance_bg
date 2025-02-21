@@ -4,20 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.93"
-llguidance = { git = "https://github.com/guidance-ai/llguidance", tag = "v0.6.12", default-features = false, features = ["lark"] }
+anyhow = "1.0.96"
+llguidance = { version = "0.6.28", default-features = false, features = ["lark", "referencing", "ahash"] }
 rayon = "1.10.0"
-serde = { version = "1.0.210", features = ["derive"] }
-serde_json = "1.0.132"
+serde = { version = "1.0.218", features = ["derive"] }
+serde_json = "1.0.139"
 
 [build-dependencies]
-cbindgen = "0.27.0"
+cbindgen = "0.28.0"
 
 [lib]
 crate-type = ["staticlib"]
 # crate-type = ["cdylib"]
 
-# [patch.'https://github.com/guidance-ai/llguidance']
+# [patch.crates-io]
 # llguidance = { path = "../llguidance/parser" }
 
 [profile.release]
