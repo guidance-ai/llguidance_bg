@@ -102,6 +102,10 @@ impl BgConstraint {
         })
     }
 
+    pub fn rollback(&self, num_tokens: usize) -> Result<()> {
+        self.with_inner(|inner| inner.parser.rollback(num_tokens))
+    }
+
     pub fn start_compute_mask(&self, cb: impl MaskCallback + 'static) -> MaskTicketId {
         let ticket = MaskTicketId(self.state.next_mask_ticket.fetch_add(1, Ordering::Relaxed));
         // This is only so that we can call with_inner() from the closure.

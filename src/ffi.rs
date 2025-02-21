@@ -258,11 +258,9 @@ unsafe impl Send for CMaskReady {}
 impl MaskCallback for CMaskReady {
     fn mask_ready(&self, mask: &SimpleVob) {
         if let Some(cb) = self.cb {
-            unsafe {
-                let mask_len = mask.len();
-                let mask_ptr = mask.as_ptr();
-                cb(self.cb_userdata, mask_ptr, mask_len * 4);
-            }
+            let mask_len = mask.len();
+            let mask_ptr = mask.as_ptr();
+            cb(self.cb_userdata, mask_ptr, mask_len * 4);
         }
     }
 }
@@ -324,6 +322,20 @@ pub extern "C" fn bllg_try_consume_tokens(
     } else {
         cc.get_error_code()
     }
+}
+
+/// Undo the last N tokens consumed.
+/// This will not get the constraint out of an error state,
+/// but will get it out of the stop state.
+/// EOS tokens are best not consumed and not rolled back.
+/// Returns 0 on success and -1 on error (use bllg_get_error() to get the exact error).
+#[no_mangle]
+pub extern "C" fn bllg_rollback_tokens(cc: &mut BllgConstraint, num_tokens: usize) -> i32 {
+    if let Some(constraint) = &mut cc.constraint {
+        let r = constraint.rollback(num_tokens);
+        cc.save_error(r);
+    }
+    cc.get_error_code()
 }
 
 /// Check how many of the tokens can be consumed, without actually consuming them.
