@@ -206,7 +206,8 @@ pub extern "C" fn bllg_get_error(cc: &BllgConstraint) -> *const c_char {
 #[no_mangle]
 pub extern "C" fn bllg_check_stop(cc: &BllgConstraint) -> bool {
     cc.constraint
-        .as_ref().is_none_or(|c| c.check_stop().unwrap_or(true))
+        .as_ref()
+        .is_none_or(|c| c.check_stop().unwrap_or(true))
 }
 
 fn save_error(e: String, error_string: *mut c_char, error_string_len: usize) {
