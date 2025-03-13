@@ -5,10 +5,12 @@ use std::env;
 fn main() {
     let crate_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
 
-    let mut config = cbindgen::Config::default();
-    config.language = cbindgen::Language::C;
-    config.cpp_compat = true;
-    config.usize_is_size_t = true; // not exposed as .with_*() method
+    let config = cbindgen::Config {
+        language: cbindgen::Language::C,
+        cpp_compat: true,
+        usize_is_size_t: true, // not exposed as .with_*() method
+        ..Default::default()
+    };
 
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed=cpp/llguidance_bg_cpp.h");

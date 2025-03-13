@@ -89,8 +89,10 @@ impl BllgConstraintMgr {
 }
 
 /// Create a new constraint manager with given parameters.
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_new_constraint_mgr(
+pub unsafe extern "C" fn bllg_new_constraint_mgr(
     init: &LlgConstraintInit,
     num_threads: usize,
     slicesv: *const *const c_char,
@@ -168,8 +170,10 @@ impl BllgConstraintMgr {
 }
 
 /// Destroy the constraint manager.
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_free_constraint_mgr(mgr: *mut BllgConstraintMgr) {
+pub unsafe extern "C" fn bllg_free_constraint_mgr(mgr: &mut BllgConstraintMgr) {
     unsafe {
         drop(Box::from_raw(mgr));
     }
@@ -177,8 +181,10 @@ pub extern "C" fn bllg_free_constraint_mgr(mgr: *mut BllgConstraintMgr) {
 
 /// Create a new constraint from a grammar JSON string
 /// Always returns a non-null value. Call bllg_get_error() on the result to check for errors.
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_new_constraint(
+pub unsafe extern "C" fn bllg_new_constraint(
     mgr: &BllgConstraintMgr,
     grammar_data: *const u8,
     grammar_size: usize,
@@ -218,8 +224,10 @@ fn save_error(e: String, error_string: *mut c_char, error_string_len: usize) {
 /// Set maximum number of threads (cores) to use for mask computation.
 /// Has to be called before starting mask computation, otherwise defaults will be used (usually all cores).
 /// Returns 0 on success and -1 on error (which will be a string copied into error_string).
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_set_num_threads(
+pub unsafe extern "C" fn bllg_set_num_threads(
     max_threads: usize,
     error_string: *mut c_char,
     error_string_len: usize,
@@ -289,8 +297,10 @@ pub extern "C" fn bllg_start_compute_mask(
 /// If any of the tokens is invalid (according to constraint),
 /// the constraint will enter error state and never leave it.
 /// Returns 0 on success and -1 on error (use bllg_get_error() to get the exact error).
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_consume_tokens(
+pub unsafe extern "C" fn bllg_consume_tokens(
     cc: &mut BllgConstraint,
     tokens: *const LlgToken,
     tokens_len: usize,
@@ -306,8 +316,10 @@ pub extern "C" fn bllg_consume_tokens(
 /// Commit as many of the tokens as the mask allows.
 /// Returns the number of tokens consumed, or -1 on error (use bllg_get_error() to get the exact error).
 /// The returned number can be 0.
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_try_consume_tokens(
+pub unsafe extern "C" fn bllg_try_consume_tokens(
     cc: &mut BllgConstraint,
     tokens: *const LlgToken,
     tokens_len: usize,
@@ -341,8 +353,10 @@ pub extern "C" fn bllg_rollback_tokens(cc: &mut BllgConstraint, num_tokens: usiz
 /// Check how many of the tokens can be consumed, without actually consuming them.
 /// Returns the number of tokens consumed, or -1 on error (use bllg_get_error() to get the exact error).
 /// The returned number can be 0.
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_validate_tokens(
+pub unsafe extern "C" fn bllg_validate_tokens(
     cc: &mut BllgConstraint,
     tokens: *const LlgToken,
     tokens_len: usize,
@@ -376,7 +390,7 @@ pub extern "C" fn bllg_wait_mask_ready(
     if let Some(constraint) = &mut cc.constraint {
         let r = constraint.wait_mask_ready(
             MaskTicketId(ticket),
-            std::time::Duration::from_micros(duration_us as u64),
+            std::time::Duration::from_micros(duration_us),
         );
         match cc.save_error(r) {
             Some(true) => 0,
@@ -392,8 +406,10 @@ pub extern "C" fn bllg_wait_mask_ready(
 /// You need to call bllg_wait_mask_ready() first to ensure the mask is ready.
 /// Returns 0 on success and -1 on error (use bllg_get_error() to get the exact error).
 /// The buffer is filled with 0s if the mask is smaller than the buffer.
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_get_last_mask(
+pub unsafe extern "C" fn bllg_get_last_mask(
     cc: &mut BllgConstraint,
     mask_ptr: *mut u32,
     mask_byte_len: usize,
@@ -410,7 +426,6 @@ pub extern "C" fn bllg_get_last_mask(
                     std::ptr::write_bytes(mask_ptr.add(to_copy) as *mut u8, 0, bytes_left);
                 }
             }
-            ()
         });
         cc.save_error(r);
     }
@@ -420,8 +435,10 @@ pub extern "C" fn bllg_get_last_mask(
 /// Return any forced tokens in the current state.
 /// The returned pointer is valid until the next call to this function.
 /// Returns the number of tokens (which can be 0), or -1 on error (use bllg_get_error() to get the exact error).
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_compute_ff_tokens(
+pub unsafe extern "C" fn bllg_compute_ff_tokens(
     cc: &mut BllgConstraint,
     tokens_out: *mut *const LlgToken,
 ) -> i32 {
@@ -438,8 +455,10 @@ pub extern "C" fn bllg_compute_ff_tokens(
 }
 
 /// Free the constraint
+/// # Safety
+/// Should be called only from C code.
 #[no_mangle]
-pub extern "C" fn bllg_free_constraint(cc: *mut BllgConstraint) {
+pub unsafe extern "C" fn bllg_free_constraint(cc: &mut BllgConstraint) {
     unsafe {
         drop(Box::from_raw(cc));
     }
