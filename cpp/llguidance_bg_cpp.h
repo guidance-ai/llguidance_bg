@@ -1,12 +1,12 @@
 #ifndef LLGUIDANCE_BG_CPP_H
 #define LLGUIDANCE_BG_CPP_H
 
-#include <string>
-#include <vector>
-#include <stdexcept>
-#include <memory>
-#include <unordered_map>
 #include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "llguidance.h"
 #include "llguidance_bg.h"
@@ -101,6 +101,13 @@ public:
     init.token_bytes = token_bytes.data();
     init.token_lens = token_lens.data();
 
+    std::vector<const char *> slices;
+    for (const auto &slice : cfg.slices) {
+      slices.push_back(slice.c_str());
+    }
+    slices.push_back(nullptr);
+    init.slices = slices.data();
+
     tokenizer = llg_new_tokenizer(&init, error_string, sizeof(error_string));
     if (tokenizer == nullptr) {
       throw std::invalid_argument("Error creating tokenizer: " +
@@ -110,15 +117,8 @@ public:
     LlgConstraintInit cinit = cfg.cinit;
     cinit.tokenizer = tokenizer;
 
-    std::vector<const char *> slices;
-    for (const auto &slice : cfg.slices) {
-      slices.push_back(slice.c_str());
-    }
-    slices.push_back(nullptr);
-
-    constraint_mgr =
-        bllg_new_constraint_mgr(&cinit, cfg.num_threads, slices.data(),
-                                error_string, sizeof(error_string));
+    constraint_mgr = bllg_new_constraint_mgr(
+        &cinit, cfg.num_threads, error_string, sizeof(error_string));
     if (constraint_mgr == nullptr) {
       throw std::invalid_argument("Error creating constraint manager: " +
                                   std::string(error_string));
@@ -147,6 +147,23 @@ public:
       throw std::invalid_argument("Error creating constraint: " + error);
     }
     return constraint;
+  }
+
+  // Returns true if the grammar is valid, false otherwise.
+  // If the grammar is invalid, message will contain the error message.
+  // If the grammar is valid, the message will contain warnings if any.
+  bool validate_grammar(const char *grammar, size_t grammar_size,
+                        std::string &message) {
+    char message_buf[4 * 1024];
+    int r =
+        bllg_validate_grammar(constraint_mgr, (const uint8_t *)grammar,
+                              grammar_size, message_buf, sizeof(message_buf));
+    message = message_buf;
+    if (r < 0) {
+      return false;
+    } else {
+      return true;
+    }
   }
 
   // utility methods

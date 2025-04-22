@@ -1,10 +1,8 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use llguidance::{
-    api::TopLevelGrammar,
-    earley::SlicedBiasComputer,
-    ffi::{LlgConstraintInit, LlgToken, LlgTokenizer},
+    api::{GrammarInit, TopLevelGrammar, ValidationResult},
+    ffi::{save_error_string, LlgConstraintInit, LlgToken, LlgTokenizer},
     toktrie::SimpleVob,
-    ParserFactory,
 };
 use std::{
     ffi::{c_char, c_void},
@@ -20,7 +18,6 @@ pub struct BllgConstraint {
 }
 
 pub struct BllgConstraintMgr {
-    factory: ParserFactory,
     init: LlgConstraintInit,
     tokenizer: LlgTokenizer,
     thread_pool: Arc<rayon::ThreadPool>,
@@ -78,13 +75,26 @@ impl BllgConstraint {
 }
 
 impl BllgConstraintMgr {
+    fn parse_grammar(&self, grammar_json: &[u8]) -> Result<TopLevelGrammar> {
+        let grammar_str = std::str::from_utf8(grammar_json)
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in grammar_json: {e}"))?;
+        TopLevelGrammar::from_lark_or_grammar_list(grammar_str)
+    }
+
     fn new_constraint(&self, grammar_json: &[u8]) -> Result<BgConstraint> {
-        let grammar: TopLevelGrammar = serde_json::from_slice(grammar_json)
-            .map_err(|e| anyhow::anyhow!("Invalid JSON in grammar_json: {e}"))?;
-        let parser = self
-            .init
-            .build_parser_from_factory(&self.factory, grammar)?;
+        let grammar = self.parse_grammar(grammar_json)?;
+        let parser = self.init.build_parser(grammar)?;
         Ok(BgConstraint::new(self.thread_pool.clone(), parser))
+    }
+
+    fn validate_grammar(&self, grammar: &[u8]) -> Result<String> {
+        let grammar = self.parse_grammar(grammar)?;
+        let tok_env = self.tokenizer.tok_env().clone();
+        match GrammarInit::Serialized(grammar).validate(Some(tok_env), self.init.limits.clone()) {
+            ValidationResult::Valid => Ok(String::new()),
+            ValidationResult::Error(e) => bail!(e),
+            r => Ok(r.render(true)),
+        }
     }
 }
 
@@ -95,30 +105,12 @@ impl BllgConstraintMgr {
 pub unsafe extern "C" fn bllg_new_constraint_mgr(
     init: &LlgConstraintInit,
     num_threads: usize,
-    slicesv: *const *const c_char,
     error_string: *mut c_char,
     error_string_len: usize,
 ) -> *mut BllgConstraintMgr {
-    let mut slices = vec![];
-    if slicesv.is_null() {
-        // default slice
-        slices = SlicedBiasComputer::general_slices();
-    } else {
-        let mut idx = 0;
-        loop {
-            let slice = unsafe { *slicesv.add(idx) };
-            if slice.is_null() {
-                break;
-            }
-            let slice = unsafe { std::ffi::CStr::from_ptr(slice) };
-            slices.push(slice.to_str().unwrap().to_string());
-            idx += 1;
-        }
-    }
-
     let tokenizer = unsafe { &(*init.tokenizer) };
 
-    match BllgConstraintMgr::new(tokenizer, num_threads, init, slices) {
+    match BllgConstraintMgr::new(tokenizer, num_threads, init) {
         Ok(r) => {
             // we keep track of the tokenizer locally
             let mut r = Box::new(r);
@@ -126,19 +118,14 @@ pub unsafe extern "C" fn bllg_new_constraint_mgr(
             Box::into_raw(r)
         }
         Err(e) => {
-            save_error(e.to_string(), error_string, error_string_len);
+            save_error_string(e, error_string, error_string_len);
             std::ptr::null_mut()
         }
     }
 }
 
 impl BllgConstraintMgr {
-    fn new(
-        tokenizer: &LlgTokenizer,
-        num_threads: usize,
-        init: &LlgConstraintInit,
-        slices: Vec<String>,
-    ) -> Result<Self> {
+    fn new(tokenizer: &LlgTokenizer, num_threads: usize, init: &LlgConstraintInit) -> Result<Self> {
         let num_threads = if num_threads == 0 {
             std::cmp::min(
                 20,
@@ -158,11 +145,6 @@ impl BllgConstraintMgr {
 
         Ok(BllgConstraintMgr {
             tokenizer: tokenizer.clone(),
-            factory: ParserFactory::new(
-                &tokenizer.token_env,
-                init.inference_capabilities(),
-                &slices,
-            )?,
             init: init.clone(),
             thread_pool: Arc::new(thread_pool),
         })
@@ -193,6 +175,40 @@ pub unsafe extern "C" fn bllg_new_constraint(
     BllgConstraint::from_bg_constraint(mgr.new_constraint(grammar))
 }
 
+/// Check if given grammar is valid.
+/// This about twice as fast as creating a matcher (which also validates).
+/// See llg_new_matcher() for the grammar format.
+/// Returns 0 on success and -1 on error and 1 on warning.
+/// The error message or warning is written to message, which is message_len bytes long.
+/// It's always NUL-terminated.
+/// # Safety
+/// This function should only be called from C code.#[no_mangle]
+#[no_mangle]
+pub unsafe extern "C" fn bllg_validate_grammar(
+    mgr: &BllgConstraintMgr,
+    grammar_data: *const u8,
+    grammar_size: usize,
+    message: *mut c_char,
+    message_len: usize,
+) -> i32 {
+    let grammar = unsafe { std::slice::from_raw_parts(grammar_data, grammar_size) };
+    match mgr.validate_grammar(grammar) {
+        Err(e) => {
+            save_error_string(e, message, message_len);
+            -1
+        }
+        Ok(s) => {
+            if !s.is_empty() {
+                save_error_string(s, message, message_len);
+                1
+            } else {
+                save_error_string("", message, message_len);
+                0
+            }
+        }
+    }
+}
+
 /// Get the error message from the constraint or null if there is no error.
 /// After it returns a non-null value, it will always return it until the constraint is freed
 /// using bllg_free_constraint() (at which point the pointer will be invalid).
@@ -208,17 +224,6 @@ pub extern "C" fn bllg_check_stop(cc: &BllgConstraint) -> bool {
     cc.constraint
         .as_ref()
         .is_none_or(|c| c.check_stop().unwrap_or(true))
-}
-
-fn save_error(e: String, error_string: *mut c_char, error_string_len: usize) {
-    if error_string_len > 1 {
-        let e = e.as_bytes();
-        let to_copy = std::cmp::min(e.len(), error_string_len - 1);
-        unsafe {
-            std::ptr::copy_nonoverlapping(e.as_ptr(), error_string as *mut u8, to_copy);
-            std::ptr::write(error_string.add(to_copy) as *mut u8, 0);
-        }
-    }
 }
 
 /// Set maximum number of threads (cores) to use for mask computation.
