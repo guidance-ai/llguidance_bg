@@ -182,7 +182,7 @@ pub unsafe extern "C" fn bllg_new_constraint(
 /// The error message or warning is written to message, which is message_len bytes long.
 /// It's always NUL-terminated.
 /// # Safety
-/// This function should only be called from C code.#[no_mangle]
+/// This function should only be called from C code.
 #[no_mangle]
 pub unsafe extern "C" fn bllg_validate_grammar(
     mgr: &BllgConstraintMgr,
