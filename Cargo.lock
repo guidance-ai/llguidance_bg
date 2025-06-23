@@ -68,9 +68,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.96"
+version = "1.0.98"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b964d184e89d9b6b67dd2715bc8e74cf3107fb2b529990c90cf517326150bf4"
+checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
 
 [[package]]
 name = "autocfg"
@@ -321,9 +321,9 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "llguidance"
-version = "0.7.21"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2263a65683971fb28712e850d695e1405960f3a7b43a194693834aea3266ab4"
+checksum = "efe0dc8285c55adbabbcbba42a5230696ca17e820dd9eefddcb13c4618c6d805"
 dependencies = [
  "anyhow",
  "derivre",
@@ -544,9 +544,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.139"
+version = "1.0.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44f86c3acccc9c65b153fe1b85a3be07fe5515274ec9f0653b4a0875731c72a6"
+checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
 dependencies = [
  "indexmap",
  "itoa",
@@ -625,9 +625,9 @@ dependencies = [
 
 [[package]]
 name = "toktrie"
-version = "0.7.21"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "279e477cd582ba1b60765c07e34fea21eefd32f1862c223ff434f6c52498df1e"
+checksum = "3ead2a96d161cb53df0d9d5ed2e239abcd4456d132b8e4b0f25c6c0aee201f86"
 dependencies = [
  "anyhow",
  "bytemuck",
