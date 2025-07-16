@@ -112,9 +112,12 @@ impl BgConstraint {
         let self_copy = self.clone_ref();
         self.state.thread_pool.spawn(move || {
             let _ignore = self_copy.with_inner(|inner| {
+                if inner.curr_mask_ticket >= ticket {
+                    // the computation is already ahead
+                    return Ok(());
+                }
                 let mask = inner.parser.compute_mask()?;
                 cb.mask_ready(&mask);
-                ensure!(inner.curr_mask_ticket < ticket, "mask computation race");
                 inner.curr_mask_ticket = ticket;
                 inner.last_mask = Some(mask);
                 self_copy.state.condvar.notify_all();
