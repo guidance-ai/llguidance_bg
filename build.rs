@@ -16,7 +16,7 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/llguidance_bg_cpp.h");
 
     std::fs::copy(
-        format!("{}/cpp/llguidance_bg_cpp.h", crate_dir),
+        format!("{crate_dir}/cpp/llguidance_bg_cpp.h"),
         format!(
             "{}/../../../llguidance_bg_cpp.h",
             env::var("OUT_DIR").unwrap()
@@ -33,7 +33,7 @@ fn main() {
         .map_or_else(
             |error| match error {
                 cbindgen::Error::ParseSyntaxError { .. } => {}
-                e => panic!("{:?}", e),
+                e => panic!("{e:?}"),
             },
             |bindings| {
                 bindings.write_to_file(format!(
