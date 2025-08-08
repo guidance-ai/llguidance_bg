@@ -321,9 +321,9 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "llguidance"
-version = "1.0.0"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efe0dc8285c55adbabbcbba42a5230696ca17e820dd9eefddcb13c4618c6d805"
+checksum = "df2538ac4619be9e12c174a73880c60f208ea3823a6a3712e6bd8b2c909192b5"
 dependencies = [
  "anyhow",
  "derivre",
@@ -625,9 +625,9 @@ dependencies = [
 
 [[package]]
 name = "toktrie"
-version = "1.0.0"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ead2a96d161cb53df0d9d5ed2e239abcd4456d132b8e4b0f25c6c0aee201f86"
+checksum = "fa84ba6b63b07769c9993e3eaac49b4012e6cb1dc5630f49f870c67b8d5e4ae9"
 dependencies = [
  "anyhow",
  "bytemuck",
