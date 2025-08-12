@@ -83,7 +83,8 @@ impl BllgConstraintMgr {
 
     fn new_constraint(&self, grammar_json: &[u8]) -> Result<BgConstraint> {
         let grammar = self.parse_grammar(grammar_json)?;
-        let parser = self.init.build_parser(grammar)?;
+        let mut parser = self.init.build_parser(grammar)?;
+        parser.start_without_prompt();
         Ok(BgConstraint::new(self.thread_pool.clone(), parser))
     }
 
@@ -456,6 +457,28 @@ pub unsafe extern "C" fn bllg_compute_ff_tokens(
         cc.ff_tokens.len() as i32
     } else {
         cc.get_error_code()
+    }
+}
+
+/// Clone all the mutable state of the constraint.
+/// The cloned constraint will not share any mutexes with the current constraint.
+/// Returns a pointer to the cloned constraint, or null on error (use bllg_get_error()
+/// on the original constraint to get the exact error).
+/// # Safety
+/// Should be called only from C code.
+#[no_mangle]
+pub unsafe extern "C" fn bllg_clone_constraint(cc: &BllgConstraint) -> *mut BllgConstraint {
+    if let Some(constraint) = &cc.constraint {
+        match constraint.deep_clone() {
+            Ok(cc) => Box::into_raw(Box::new(BllgConstraint {
+                local_error: None,
+                ff_tokens: vec![],
+                constraint: Some(cc),
+            })),
+            Err(_) => std::ptr::null_mut(),
+        }
+    } else {
+        std::ptr::null_mut()
     }
 }
 

@@ -15,8 +15,12 @@ int main() {
     };
     llguidance_bg::ConstraintMgr mgr;
     mgr.init(cfg);
-    std::string grammar = "{ \"grammars\": [{ \"lark_grammar\": \"start: /.*/\" }] }";
+    std::string grammar =
+        "{ \"grammars\": [{ \"lark_grammar\": \"start: /.*/\" }] }";
     auto constraint = mgr.create_constraint(grammar.c_str(), grammar.size());
+    auto c2 = bllg_clone_constraint(constraint);
+    bllg_free_constraint(constraint);
+    bllg_free_constraint(c2);
 
     std::string g2 = "{ foobar";
     std::string msg;

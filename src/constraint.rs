@@ -52,8 +52,7 @@ pub struct BgConstraint {
 }
 
 impl BgConstraint {
-    pub fn new(thread_pool: Arc<rayon::ThreadPool>, mut parser: TokenParser) -> Self {
-        parser.start_without_prompt();
+    pub fn new(thread_pool: Arc<rayon::ThreadPool>, parser: TokenParser) -> Self {
         BgConstraint {
             state: Arc::new(ConstraintState {
                 inner: Mutex::new(ConstraintInner {
@@ -73,6 +72,14 @@ impl BgConstraint {
         BgConstraint {
             state: Arc::clone(&self.state),
         }
+    }
+
+    pub fn deep_clone(&self) -> Result<Self> {
+        let inner = self.state.inner.lock().unwrap();
+        inner.check_error()?;
+        let parser = inner.parser.deep_clone();
+        let thread_pool = Arc::clone(&self.state.thread_pool);
+        Ok(Self::new(thread_pool, parser))
     }
 
     fn with_inner<T>(&self, f: impl FnOnce(&mut ConstraintInner) -> Result<T>) -> Result<T> {

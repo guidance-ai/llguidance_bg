@@ -19,3 +19,4 @@ perf.data
 perf.data.old
 *.dSYM
 cpp/test
+.vscode/settings.json
