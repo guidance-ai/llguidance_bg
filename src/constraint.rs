@@ -17,8 +17,12 @@ use llguidance::{
 struct ConstraintInner {
     parser: TokenParser,
     error: Option<String>,
+}
+
+struct TicketInner {
     curr_mask_ticket: MaskTicketId,
     last_mask: Option<SimpleVob>,
+    error: Option<String>,
 }
 
 pub trait MaskCallback: Send {
@@ -38,9 +42,19 @@ impl ConstraintInner {
     }
 }
 
+impl TicketInner {
+    fn check_error(&self) -> Result<()> {
+        if let Some(e) = self.error.as_ref() {
+            bail!("{}", e);
+        }
+        Ok(())
+    }
+}
+
 struct ConstraintState {
     inner: Mutex<ConstraintInner>,
-    condvar: Condvar,
+    ticket: Mutex<TicketInner>,
+    condvar: Condvar, // under ticket
     next_mask_ticket: AtomicI32,
     thread_pool: Arc<rayon::ThreadPool>,
 }
@@ -58,8 +72,11 @@ impl BgConstraint {
                 inner: Mutex::new(ConstraintInner {
                     parser,
                     error: None,
+                }),
+                ticket: Mutex::new(TicketInner {
                     curr_mask_ticket: MaskTicketId(0),
                     last_mask: None,
+                    error: None,
                 }),
                 condvar: Condvar::new(),
                 next_mask_ticket: AtomicI32::new(1),
@@ -94,6 +111,29 @@ impl BgConstraint {
                 if inner.error.is_none() {
                     inner.error = Some(e.to_string());
                 }
+                {
+                    let mut tk = self.state.ticket.lock().unwrap();
+                    if tk.error.is_none() {
+                        tk.error = Some(e.to_string());
+                    }
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn with_ticket<T>(&self, f: impl FnOnce(&mut TicketInner) -> Result<T>) -> Result<T> {
+        let mut tk = self.state.ticket.lock().unwrap();
+        tk.check_error()?;
+        // We catch any panics here and transform them into regular errors.
+        // They shouldn't happen, but if they do, we don't want to crash the whole program.
+        let r = panic_utils::catch_unwind(panic::AssertUnwindSafe(|| f(&mut tk)));
+        match r {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                if tk.error.is_none() {
+                    tk.error = Some(e.to_string());
+                }
                 Err(e)
             }
         }
@@ -119,15 +159,21 @@ impl BgConstraint {
         let self_copy = self.clone_ref();
         self.state.thread_pool.spawn(move || {
             let _ignore = self_copy.with_inner(|inner| {
-                if inner.curr_mask_ticket >= ticket {
-                    // the computation is already ahead
-                    return Ok(());
+                {
+                    let tk = self_copy.state.ticket.lock().unwrap();
+                    if tk.curr_mask_ticket >= ticket {
+                        // the computation is already ahead
+                        return Ok(());
+                    }
                 }
                 let mask = inner.parser.compute_mask()?;
                 cb.mask_ready(&mask);
-                inner.curr_mask_ticket = ticket;
-                inner.last_mask = Some(mask);
-                self_copy.state.condvar.notify_all();
+                let _ignore = self_copy.with_ticket(|tk| {
+                    tk.curr_mask_ticket = ticket;
+                    tk.last_mask = Some(mask);
+                    self_copy.state.condvar.notify_all();
+                    Ok(())
+                });
                 Ok(())
             });
         });
@@ -135,17 +181,17 @@ impl BgConstraint {
     }
 
     pub fn wait_mask_ready(&self, ticket: MaskTicketId, duration: Duration) -> Result<bool> {
-        let mut inner = self.state.inner.lock().unwrap();
+        let mut tk = self.state.ticket.lock().unwrap();
 
-        if inner.curr_mask_ticket >= ticket {
-            inner.check_error()?;
+        if tk.curr_mask_ticket >= ticket {
+            tk.check_error()?;
             return Ok(true);
         }
 
         let deadline = Instant::now() + duration;
 
-        while inner.curr_mask_ticket < ticket {
-            inner.check_error()?;
+        while tk.curr_mask_ticket < ticket {
+            tk.check_error()?;
 
             let now = Instant::now();
             if now >= deadline {
@@ -153,15 +199,15 @@ impl BgConstraint {
             }
             let timeout = deadline - now;
 
-            let (guard, result) = self.state.condvar.wait_timeout(inner, timeout).unwrap();
-            inner = guard;
+            let (guard, result) = self.state.condvar.wait_timeout(tk, timeout).unwrap();
+            tk = guard;
 
             if result.timed_out() {
                 return Ok(false);
             }
         }
 
-        inner.check_error()?;
+        tk.check_error()?;
         Ok(true)
     }
 
@@ -196,8 +242,8 @@ impl BgConstraint {
     }
 
     pub fn with_last_mask<T>(&self, f: impl FnOnce(&SimpleVob) -> T) -> Result<T> {
-        self.with_inner(|inner| {
-            Ok(f(inner
+        self.with_ticket(|tk| {
+            Ok(f(tk
                 .last_mask
                 .as_ref()
                 .ok_or_else(|| anyhow!("no mask"))?))
