@@ -163,17 +163,14 @@ impl BgConstraint {
         let self_copy = self.clone_ref();
         self.state.thread_pool.spawn(move || {
             let _ignore = self_copy.with_inner(|inner| {
-                if self_copy
-                    .with_ticket(|tk| {
-                        if ticket <= tk.last_started_mask_ticket {
-                            // the computation is already ahead
-                            return Ok(true);
-                        }
-                        tk.last_started_mask_ticket = ticket;
-                        Ok(false)
-                    })
-                    .unwrap()
-                {
+                if self_copy.with_ticket(|tk| {
+                    if ticket <= tk.last_started_mask_ticket {
+                        // the computation is already ahead
+                        return Ok(true);
+                    }
+                    tk.last_started_mask_ticket = ticket;
+                    Ok(false)
+                })? {
                     return Ok(());
                 }
 
