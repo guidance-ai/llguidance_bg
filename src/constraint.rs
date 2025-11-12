@@ -20,7 +20,8 @@ struct ConstraintInner {
 }
 
 struct TicketInner {
-    curr_mask_ticket: MaskTicketId,
+    last_started_mask_ticket: MaskTicketId,
+    last_done_mask_ticket: MaskTicketId,
     last_mask: Option<SimpleVob>,
     error: Option<String>,
 }
@@ -54,7 +55,7 @@ impl TicketInner {
 struct ConstraintState {
     inner: Mutex<ConstraintInner>,
     ticket: Mutex<TicketInner>,
-    condvar: Condvar, // under ticket
+    mask_done_cond: Condvar, // under ticket mutex
     next_mask_ticket: AtomicI32,
     thread_pool: Arc<rayon::ThreadPool>,
 }
@@ -74,11 +75,12 @@ impl BgConstraint {
                     error: None,
                 }),
                 ticket: Mutex::new(TicketInner {
-                    curr_mask_ticket: MaskTicketId(0),
+                    last_started_mask_ticket: MaskTicketId(0),
+                    last_done_mask_ticket: MaskTicketId(0),
                     last_mask: None,
                     error: None,
                 }),
-                condvar: Condvar::new(),
+                mask_done_cond: Condvar::new(),
                 next_mask_ticket: AtomicI32::new(1),
                 thread_pool,
             }),
@@ -112,9 +114,11 @@ impl BgConstraint {
                     inner.error = Some(e.to_string());
                 }
                 {
+                    // Propagate error to self.state.ticket as well, so wait_mask_ready can see it
                     let mut tk = self.state.ticket.lock().unwrap();
                     if tk.error.is_none() {
                         tk.error = Some(e.to_string());
+                        self.state.mask_done_cond.notify_all();
                     }
                 }
                 Err(e)
@@ -159,19 +163,29 @@ impl BgConstraint {
         let self_copy = self.clone_ref();
         self.state.thread_pool.spawn(move || {
             let _ignore = self_copy.with_inner(|inner| {
+                if self_copy
+                    .with_ticket(|tk| {
+                        if ticket <= tk.last_started_mask_ticket {
+                            // the computation is already ahead
+                            return Ok(true);
+                        }
+                        tk.last_started_mask_ticket = ticket;
+                        Ok(false)
+                    })
+                    .unwrap()
                 {
-                    let tk = self_copy.state.ticket.lock().unwrap();
-                    if tk.curr_mask_ticket >= ticket {
-                        // the computation is already ahead
-                        return Ok(());
-                    }
+                    return Ok(());
                 }
+
                 let mask = inner.parser.compute_mask()?;
                 cb.mask_ready(&mask);
+
                 let _ignore = self_copy.with_ticket(|tk| {
-                    tk.curr_mask_ticket = ticket;
-                    tk.last_mask = Some(mask);
-                    self_copy.state.condvar.notify_all();
+                    if ticket > tk.last_done_mask_ticket {
+                        tk.last_done_mask_ticket = ticket;
+                        tk.last_mask = Some(mask);
+                        self_copy.state.mask_done_cond.notify_all();
+                    }
                     Ok(())
                 });
                 Ok(())
@@ -183,14 +197,14 @@ impl BgConstraint {
     pub fn wait_mask_ready(&self, ticket: MaskTicketId, duration: Duration) -> Result<bool> {
         let mut tk = self.state.ticket.lock().unwrap();
 
-        if tk.curr_mask_ticket >= ticket {
+        if tk.last_done_mask_ticket >= ticket {
             tk.check_error()?;
             return Ok(true);
         }
 
         let deadline = Instant::now() + duration;
 
-        while tk.curr_mask_ticket < ticket {
+        while tk.last_done_mask_ticket < ticket {
             tk.check_error()?;
 
             let now = Instant::now();
@@ -199,7 +213,7 @@ impl BgConstraint {
             }
             let timeout = deadline - now;
 
-            let (guard, result) = self.state.condvar.wait_timeout(tk, timeout).unwrap();
+            let (guard, result) = self.state.mask_done_cond.wait_timeout(tk, timeout).unwrap();
             tk = guard;
 
             if result.timed_out() {
