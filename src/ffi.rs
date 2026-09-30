@@ -2,19 +2,25 @@ use anyhow::{bail, Result};
 use llguidance::{
     api::{GrammarInit, TopLevelGrammar, ValidationResult},
     ffi::{save_error_string, LlgConstraintInit, LlgToken, LlgTokenizer},
+    panic_utils,
     toktrie::SimpleVob,
 };
 use std::{
     ffi::{c_char, c_void},
+    panic,
     sync::Arc,
 };
 
-use crate::{constraint::MaskTicketId, BgConstraint, MaskCallback};
+use crate::{constraint::MaskTicketId, BgCancellationHandle, BgConstraint, MaskCallback};
 
 pub struct BllgConstraint {
     local_error: Option<String>,
     ff_tokens: Vec<LlgToken>,
     constraint: Option<BgConstraint>,
+}
+
+pub struct BllgCancellationHandle {
+    handle: BgCancellationHandle,
 }
 
 pub struct BllgConstraintMgr {
@@ -293,10 +299,60 @@ pub extern "C" fn bllg_start_compute_mask(
             cb: mask_ready,
             cb_userdata: mask_ready_userdata,
         };
-        let r = constraint.start_compute_mask(cb);
-        return r.0;
+        let r = constraint.try_start_compute_mask(cb);
+        return match cc.save_error(r) {
+            Some(ticket) => ticket.0,
+            None => cc.get_error_code(),
+        };
     }
     cc.get_error_code()
+}
+
+/// Get a thread-safe cancellation handle for a constraint.
+/// Call this before bllg_start_compute_mask() so cancellation is enabled before work is queued.
+/// The returned handle remains valid after the constraint is freed and must be freed with
+/// bllg_free_cancellation_handle().
+/// Returns null if the constraint is already in an error state.
+/// A null result does not modify the constraint.
+#[no_mangle]
+pub extern "C" fn bllg_get_cancellation_handle(cc: &BllgConstraint) -> *mut BllgCancellationHandle {
+    match &cc.constraint {
+        Some(constraint) => match constraint.cancellation_handle() {
+            Ok(handle) => Box::into_raw(Box::new(BllgCancellationHandle { handle })),
+            Err(_) => std::ptr::null_mut(),
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Permanently cancel queued or active work for the associated constraint.
+/// This function is thread-safe and may run concurrently with mask computation.
+/// Returns true when no callback is active after the function returns.
+/// Returns false when called from any mask callback while the target constraint has an active
+/// callback; in that case callback userdata must remain valid until that callback returns.
+#[no_mangle]
+pub extern "C" fn bllg_cancel(handle: &BllgCancellationHandle) -> bool {
+    panic_utils::catch_unwind(panic::AssertUnwindSafe(|| Ok(handle.handle.cancel())))
+        .unwrap_or(false)
+}
+
+/// Check whether cancellation has been requested.
+#[no_mangle]
+pub extern "C" fn bllg_is_cancelled(handle: &BllgCancellationHandle) -> bool {
+    handle.handle.is_cancelled()
+}
+
+/// Free a cancellation handle.
+/// # Safety
+/// The handle must be null or returned by bllg_get_cancellation_handle(), and must not be used
+/// after this call.
+#[no_mangle]
+pub unsafe extern "C" fn bllg_free_cancellation_handle(handle: *mut BllgCancellationHandle) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
 }
 
 /// Commit the token(s) sampled.
@@ -449,21 +505,22 @@ pub unsafe extern "C" fn bllg_compute_ff_tokens(
     tokens_out: *mut *const LlgToken,
 ) -> i32 {
     if let Some(constraint) = &mut cc.constraint {
-        let tokens = constraint.compute_ff_tokens();
-        cc.ff_tokens = tokens;
-        unsafe {
-            *tokens_out = cc.ff_tokens.as_ptr();
+        let r = constraint.try_compute_ff_tokens();
+        if let Some(tokens) = cc.save_error(r) {
+            cc.ff_tokens = tokens;
+            unsafe {
+                *tokens_out = cc.ff_tokens.as_ptr();
+            }
+            return cc.ff_tokens.len() as i32;
         }
-        cc.ff_tokens.len() as i32
-    } else {
-        cc.get_error_code()
     }
+    cc.get_error_code()
 }
 
 /// Clone all the mutable state of the constraint.
 /// The cloned constraint will not share any mutexes with the current constraint.
-/// Returns a pointer to the cloned constraint, or null on error (use bllg_get_error()
-/// on the original constraint to get the exact error).
+/// Returns a pointer to the cloned constraint, or null on error.
+/// A cancelled constraint cannot be cloned; clone it before cancelling it.
 /// # Safety
 /// Should be called only from C code.
 #[no_mangle]

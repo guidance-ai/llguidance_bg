@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.96"
-llguidance = { git = "https://github.com/guidance-ai/llguidance", rev = "c05068ccf08b43abbe3d175f096066af8c6cd3ee", default-features = false, features = ["lark", "referencing", "ahash"] }
+llguidance = { git = "https://github.com/guidance-ai/llguidance", tag = "v1.9.1", default-features = false, features = ["lark", "referencing", "ahash"] }
 rayon = "1.10.0"
 serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "1.0.139"
