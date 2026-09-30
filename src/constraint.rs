@@ -33,6 +33,16 @@ struct MaskJob {
     callback: Box<dyn MaskCallback>,
 }
 
+fn drop_mask_job(job: MaskJob) -> bool {
+    match panic::catch_unwind(panic::AssertUnwindSafe(|| drop(job))) {
+        Ok(()) => true,
+        Err(payload) => {
+            std::mem::forget(payload);
+            false
+        }
+    }
+}
+
 #[derive(Default)]
 struct WorkQueue {
     jobs: VecDeque<MaskJob>,
@@ -114,12 +124,8 @@ impl BgCancellationHandle {
             state.mask_done_cond.notify_all();
             drop(ticket);
 
-            let mut queued_job_panic = None;
             for job in queued_jobs {
-                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| drop(job)));
-                if queued_job_panic.is_none() {
-                    queued_job_panic = result.err();
-                }
+                drop_mask_job(job);
             }
 
             let caller_is_callback = MASK_CALLBACK_DEPTH.with(|depth| depth.get() > 0);
@@ -130,11 +136,6 @@ impl BgCancellationHandle {
                 while callback_state.active {
                     callback_state = state.callback_done_cond.wait(callback_state).unwrap();
                 }
-            }
-            drop(callback_state);
-
-            if let Some(payload) = queued_job_panic {
-                panic::resume_unwind(payload);
             }
         }
         callback_quiesced
@@ -234,6 +235,7 @@ impl BgConstraint {
     pub fn cancellation_handle(&self) -> Result<BgCancellationHandle> {
         let mut inner = self.state.inner.lock().unwrap();
         inner.check_error()?;
+        // This lock also makes cancellation visible before any later job can inspect the state.
         let cancellation = inner.parser.enable_cancellation();
         let cancellation = self.state.cancellation.get_or_init(|| cancellation).clone();
         Ok(BgCancellationHandle {
@@ -316,11 +318,11 @@ impl BgConstraint {
             let self_copy = self.clone_ref();
             self.state
                 .thread_pool
-                .spawn(move || self_copy.run_mask_job(job));
+                .spawn(move || self_copy.run_mask_job_safely(job));
             return ticket;
         }
 
-        // Keep same-constraint jobs from occupying pool threads while waiting for the parser lock.
+        // Retain ownership of pending callbacks so cancellation can synchronously release them.
         let should_spawn = {
             let mut queue = self.state.work_queue.lock().unwrap();
             queue.jobs.push_back(job);
@@ -366,12 +368,7 @@ impl BgConstraint {
                 }
             }
         };
-        if let Err(error) = panic_utils::catch_unwind(panic::AssertUnwindSafe(|| {
-            self.run_mask_job(job);
-            Ok(())
-        })) {
-            self.record_error(&error.to_string());
-        }
+        self.run_mask_job_safely(job);
 
         let should_reschedule = {
             let mut queue = self.state.work_queue.lock().unwrap();
@@ -406,7 +403,19 @@ impl BgConstraint {
         self.state.mask_done_cond.notify_all();
     }
 
-    fn run_mask_job(&self, job: MaskJob) {
+    fn run_mask_job_safely(&self, job: MaskJob) {
+        if let Err(payload) =
+            panic::catch_unwind(panic::AssertUnwindSafe(|| self.run_mask_job(&job)))
+        {
+            std::mem::forget(payload);
+            self.record_error("mask job panicked");
+        }
+        if !drop_mask_job(job) {
+            self.record_error("mask callback drop panicked");
+        }
+    }
+
+    fn run_mask_job(&self, job: &MaskJob) {
         let result = self.with_inner(|inner| {
             if self.with_ticket(|tk| {
                 if job.ticket <= tk.last_started_mask_ticket {
@@ -418,6 +427,8 @@ impl BgConstraint {
                 return Ok(());
             }
 
+            // A handle can only be installed while holding `inner`, so an unguarded callback
+            // cannot race a cancellation request.
             let cancellable = self.state.cancellation.get().is_some();
             let mask = inner.parser.compute_mask()?;
 
@@ -426,7 +437,13 @@ impl BgConstraint {
             } else {
                 None
             };
-            job.callback.mask_ready(&mask);
+            if let Err(payload) =
+                panic::catch_unwind(panic::AssertUnwindSafe(|| job.callback.mask_ready(&mask)))
+            {
+                let detail = panic_utils::mk_panic_error(&payload);
+                std::mem::forget(payload);
+                bail!("mask callback panicked: {detail}");
+            }
             if cancellable
                 && self
                     .state
@@ -819,16 +836,40 @@ mod tests {
         }
     }
 
-    struct CountedPanicDropCallback(Arc<AtomicUsize>);
+    struct PanicOnDropPayload;
 
-    impl MaskCallback for CountedPanicDropCallback {
+    impl Drop for PanicOnDropPayload {
+        fn drop(&mut self) {
+            panic!("panic payload drop");
+        }
+    }
+
+    struct PanickingPayloadDropCallback(Arc<AtomicUsize>);
+
+    impl MaskCallback for PanickingPayloadDropCallback {
         fn mask_ready(&self, _: &SimpleVob) {}
     }
 
-    impl Drop for CountedPanicDropCallback {
+    impl Drop for PanickingPayloadDropCallback {
         fn drop(&mut self) {
             self.0.fetch_add(1, Ordering::SeqCst);
-            panic!("callback drop panic");
+            panic::panic_any(PanicOnDropPayload);
+        }
+    }
+
+    struct PanickingPayloadCallback;
+
+    impl MaskCallback for PanickingPayloadCallback {
+        fn mask_ready(&self, _: &SimpleVob) {
+            panic::panic_any(PanicOnDropPayload);
+        }
+    }
+
+    struct PanickingCallback;
+
+    impl MaskCallback for PanickingCallback {
+        fn mask_ready(&self, _: &SimpleVob) {
+            panic!("callback panic detail");
         }
     }
 
@@ -1021,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn panicking_queued_callback_drops_are_isolated() {
+    fn panicking_queued_callback_payloads_are_isolated() {
         let thread_pool = Arc::new(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
@@ -1039,10 +1080,12 @@ mod tests {
         });
         blocker_started_rx.recv().unwrap();
         let drops = Arc::new(AtomicUsize::new(0));
-        let first_ticket = constraint.start_compute_mask(CountedPanicDropCallback(drops.clone()));
-        let second_ticket = constraint.start_compute_mask(CountedPanicDropCallback(drops.clone()));
+        let first_ticket =
+            constraint.start_compute_mask(PanickingPayloadDropCallback(drops.clone()));
+        let second_ticket =
+            constraint.start_compute_mask(PanickingPayloadDropCallback(drops.clone()));
 
-        assert!(panic::catch_unwind(panic::AssertUnwindSafe(|| handle.cancel())).is_err());
+        assert!(handle.cancel());
         assert_eq!(drops.load(Ordering::SeqCst), 2);
         assert!(constraint
             .wait_mask_ready(first_ticket, Duration::ZERO)
@@ -1055,6 +1098,62 @@ mod tests {
             .to_string()
             .contains("operation cancelled"));
         release_blocker_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn panicking_payload_does_not_escape_worker() {
+        let constraint = constraint();
+        let _cancellation = constraint.cancellation_handle().unwrap();
+        let first_ticket = constraint.start_compute_mask(PanickingPayloadCallback);
+        let second_ticket =
+            constraint.start_compute_mask(RecordCallback(Arc::new(AtomicBool::new(false))));
+
+        assert!(constraint
+            .wait_mask_ready(first_ticket, Duration::from_secs(1))
+            .is_err());
+        assert!(constraint
+            .wait_mask_ready(second_ticket, Duration::from_secs(1))
+            .is_err());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let queue = constraint.state.work_queue.lock().unwrap();
+            if !queue.worker_running && queue.jobs.is_empty() {
+                break;
+            }
+            drop(queue);
+            assert!(Instant::now() < deadline, "worker queue remained wedged");
+            thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn panicking_payload_does_not_escape_direct_worker() {
+        let constraint = constraint();
+        let ticket = constraint.start_compute_mask(PanickingPayloadCallback);
+
+        assert!(constraint
+            .wait_mask_ready(ticket, Duration::from_secs(1))
+            .is_err());
+
+        let (done_tx, done_rx) = mpsc::channel();
+        constraint
+            .state
+            .thread_pool
+            .spawn(move || done_tx.send(()).unwrap());
+        done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn callback_panic_preserves_diagnostic() {
+        let constraint = constraint();
+        let ticket = constraint.start_compute_mask(PanickingCallback);
+
+        assert!(constraint
+            .wait_mask_ready(ticket, Duration::from_secs(1))
+            .unwrap_err()
+            .to_string()
+            .contains("callback panic detail"));
     }
 
     #[test]
