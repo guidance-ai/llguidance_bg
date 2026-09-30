@@ -103,17 +103,6 @@ impl BgCancellationHandle {
         self.cancellation.cancel();
         let mut callback_quiesced = true;
         if let Some(state) = self.state.upgrade() {
-            let caller_is_callback = MASK_CALLBACK_DEPTH.with(|depth| depth.get() > 0);
-            let mut callback_state = state.callback_state.lock().unwrap();
-            if callback_state.active && caller_is_callback {
-                callback_quiesced = false;
-            } else {
-                while callback_state.active {
-                    callback_state = state.callback_done_cond.wait(callback_state).unwrap();
-                }
-            }
-            drop(callback_state);
-
             let queued_jobs = {
                 let mut queue = state.work_queue.lock().unwrap();
                 std::mem::take(&mut queue.jobs)
@@ -125,6 +114,16 @@ impl BgCancellationHandle {
             state.mask_done_cond.notify_all();
             drop(ticket);
             drop(queued_jobs);
+
+            let caller_is_callback = MASK_CALLBACK_DEPTH.with(|depth| depth.get() > 0);
+            let mut callback_state = state.callback_state.lock().unwrap();
+            if callback_state.active && caller_is_callback {
+                callback_quiesced = false;
+            } else {
+                while callback_state.active {
+                    callback_state = state.callback_done_cond.wait(callback_state).unwrap();
+                }
+            }
         }
         callback_quiesced
     }
@@ -849,6 +848,9 @@ mod tests {
         let handle = constraint.cancellation_handle().unwrap();
         let (callback_entered_tx, callback_entered_rx) = mpsc::channel();
         let (release_callback_tx, release_callback_rx) = mpsc::channel();
+        let (waiter_started_tx, waiter_started_rx) = mpsc::channel();
+        let (waiter_done_tx, waiter_done_rx) = mpsc::channel();
+        let (release_waiter_tx, release_waiter_rx) = mpsc::channel();
         let (cancel_started_tx, cancel_started_rx) = mpsc::channel();
         let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
 
@@ -857,6 +859,16 @@ mod tests {
             release: release_callback_rx,
         });
         callback_entered_rx.recv().unwrap();
+
+        let waiter = constraint.clone_ref();
+        let waiter_thread = thread::spawn(move || {
+            waiter_started_tx.send(()).unwrap();
+            let result = waiter.wait_mask_ready(ticket, Duration::from_secs(30));
+            waiter_done_tx.send(result).unwrap();
+            release_waiter_rx.recv().unwrap();
+            release_callback_tx.send(()).unwrap();
+        });
+        waiter_started_rx.recv().unwrap();
 
         let cancel_thread = thread::spawn(move || {
             cancel_started_tx.send(()).unwrap();
@@ -868,8 +880,15 @@ mod tests {
             .recv_timeout(Duration::from_millis(20))
             .is_err());
 
-        release_callback_tx.send(()).unwrap();
+        assert!(waiter_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+        release_waiter_tx.send(()).unwrap();
         cancel_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        waiter_thread.join().unwrap();
         cancel_thread.join().unwrap();
         assert!(constraint
             .wait_mask_ready(ticket, Duration::from_secs(1))
