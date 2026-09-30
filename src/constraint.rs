@@ -113,7 +113,14 @@ impl BgCancellationHandle {
             }
             state.mask_done_cond.notify_all();
             drop(ticket);
-            drop(queued_jobs);
+
+            let mut queued_job_panic = None;
+            for job in queued_jobs {
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| drop(job)));
+                if queued_job_panic.is_none() {
+                    queued_job_panic = result.err();
+                }
+            }
 
             let caller_is_callback = MASK_CALLBACK_DEPTH.with(|depth| depth.get() > 0);
             let mut callback_state = state.callback_state.lock().unwrap();
@@ -123,6 +130,11 @@ impl BgCancellationHandle {
                 while callback_state.active {
                     callback_state = state.callback_done_cond.wait(callback_state).unwrap();
                 }
+            }
+            drop(callback_state);
+
+            if let Some(payload) = queued_job_panic {
+                panic::resume_unwind(payload);
             }
         }
         callback_quiesced
@@ -531,7 +543,7 @@ mod tests {
     };
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc, Barrier,
         },
         thread,
@@ -807,6 +819,19 @@ mod tests {
         }
     }
 
+    struct CountedPanicDropCallback(Arc<AtomicUsize>);
+
+    impl MaskCallback for CountedPanicDropCallback {
+        fn mask_ready(&self, _: &SimpleVob) {}
+    }
+
+    impl Drop for CountedPanicDropCallback {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            panic!("callback drop panic");
+        }
+    }
+
     #[test]
     fn queued_computation_observes_cancellation() {
         let thread_pool = Arc::new(
@@ -996,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn panicking_queued_callback_drop_leaves_cancelled_state() {
+    fn panicking_queued_callback_drops_are_isolated() {
         let thread_pool = Arc::new(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(1)
@@ -1013,11 +1038,19 @@ mod tests {
             release_blocker_rx.recv().unwrap();
         });
         blocker_started_rx.recv().unwrap();
-        let ticket = constraint.start_compute_mask(PanicDropCallback);
+        let drops = Arc::new(AtomicUsize::new(0));
+        let first_ticket = constraint.start_compute_mask(CountedPanicDropCallback(drops.clone()));
+        let second_ticket = constraint.start_compute_mask(CountedPanicDropCallback(drops.clone()));
 
         assert!(panic::catch_unwind(panic::AssertUnwindSafe(|| handle.cancel())).is_err());
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
         assert!(constraint
-            .wait_mask_ready(ticket, Duration::ZERO)
+            .wait_mask_ready(first_ticket, Duration::ZERO)
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+        assert!(constraint
+            .wait_mask_ready(second_ticket, Duration::ZERO)
             .unwrap_err()
             .to_string()
             .contains("operation cancelled"));
