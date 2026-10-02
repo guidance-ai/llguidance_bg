@@ -84,6 +84,12 @@ impl BgCancellationHandle {
 
 impl BgConstraint {
     pub fn new(thread_pool: Arc<rayon::ThreadPool>, parser: TokenParser) -> Self {
+        let cancellation = OnceLock::new();
+        if let Some(handle) = parser.cancellation_handle() {
+            cancellation
+                .set(handle)
+                .expect("cancellation handle is initialized only once");
+        }
         BgConstraint {
             state: Arc::new(ConstraintState {
                 inner: Mutex::new(ConstraintInner {
@@ -97,7 +103,7 @@ impl BgConstraint {
                     error: None,
                 }),
                 mask_done_cond: Condvar::new(),
-                cancellation: OnceLock::new(),
+                cancellation,
                 next_mask_ticket: AtomicI32::new(1),
                 thread_pool,
             }),
@@ -238,10 +244,8 @@ impl BgConstraint {
         ticket
     }
 
-    pub(crate) fn try_start_compute_mask(
-        &self,
-        cb: impl MaskCallback + 'static,
-    ) -> Result<MaskTicketId> {
+    /// Start mask computation unless the constraint has already been cancelled.
+    pub fn try_start_compute_mask(&self, cb: impl MaskCallback + 'static) -> Result<MaskTicketId> {
         if self
             .state
             .cancellation
@@ -288,11 +292,16 @@ impl BgConstraint {
         self.with_inner(|inner| inner.parser.check_stop())
     }
 
+    /// Return forced tokens, or an empty list if the operation fails.
+    ///
+    /// Use [`Self::try_compute_ff_tokens`] to distinguish cancellation and other errors from an
+    /// empty result.
     pub fn compute_ff_tokens(&self) -> Vec<TokenId> {
         self.try_compute_ff_tokens().unwrap_or_else(|_| vec![])
     }
 
-    pub(crate) fn try_compute_ff_tokens(&self) -> Result<Vec<TokenId>> {
+    /// Return forced tokens while preserving cancellation and parser errors.
+    pub fn try_compute_ff_tokens(&self) -> Result<Vec<TokenId>> {
         self.with_inner(|inner| Ok(inner.parser.compute_ff_tokens()))
     }
 
@@ -382,6 +391,39 @@ mod tests {
         first.cancel();
 
         assert!(second.is_cancelled());
+        assert!(constraint
+            .try_start_compute_mask(RecordCallback(Arc::new(AtomicBool::new(false))))
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+        assert!(constraint
+            .try_compute_ff_tokens()
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+    }
+
+    #[test]
+    fn inherits_existing_parser_cancellation() {
+        let tok_env = ApproximateTokEnv::single_byte_env();
+        let factory = ParserFactory::new_simple(&tok_env).unwrap();
+        let mut parser = factory
+            .create_parser(TopLevelGrammar::from_lark(r#"start: "a""#.to_string()))
+            .unwrap();
+        parser.start_without_prompt();
+        let handle = parser.enable_cancellation();
+        let constraint = BgConstraint::new(
+            Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .build()
+                    .unwrap(),
+            ),
+            parser,
+        );
+
+        handle.cancel();
+
         assert!(constraint
             .try_start_compute_mask(RecordCallback(Arc::new(AtomicBool::new(false))))
             .unwrap_err()
