@@ -2,12 +2,10 @@ use anyhow::{bail, Result};
 use llguidance::{
     api::{GrammarInit, TopLevelGrammar, ValidationResult},
     ffi::{save_error_string, LlgConstraintInit, LlgToken, LlgTokenizer},
-    panic_utils,
     toktrie::SimpleVob,
 };
 use std::{
     ffi::{c_char, c_void},
-    panic,
     sync::Arc,
 };
 
@@ -327,13 +325,10 @@ pub extern "C" fn bllg_get_cancellation_handle(cc: &BllgConstraint) -> *mut Bllg
 
 /// Permanently cancel queued or active work for the associated constraint.
 /// This function is thread-safe and may run concurrently with mask computation.
-/// Returns true when no callback is active after the function returns.
-/// Returns false when called from any mask callback while the target constraint has an active
-/// callback; in that case callback userdata must remain valid until that callback returns.
+/// This function does not wait for active work or callbacks to finish.
 #[no_mangle]
-pub extern "C" fn bllg_cancel(handle: &BllgCancellationHandle) -> bool {
-    panic_utils::catch_unwind(panic::AssertUnwindSafe(|| Ok(handle.handle.cancel())))
-        .unwrap_or(false)
+pub extern "C" fn bllg_cancel(handle: &BllgCancellationHandle) {
+    handle.handle.cancel();
 }
 
 /// Check whether cancellation has been requested.

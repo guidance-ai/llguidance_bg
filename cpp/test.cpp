@@ -38,7 +38,7 @@ int main() {
     bllg_free_constraint(c4);
     assert(bllg_is_cancelled(cancellation2));
     assert(bllg_is_cancelled(cancellation3));
-    assert(bllg_cancel(cancellation4));
+    bllg_cancel(cancellation4);
     assert(bllg_is_cancelled(cancellation4));
     bllg_free_cancellation_handle(cancellation2);
     bllg_free_cancellation_handle(cancellation3);

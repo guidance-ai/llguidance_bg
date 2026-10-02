@@ -11,10 +11,9 @@ and release the handle with `bllg_free_cancellation_handle()`. The handle remain
 constraint is freed. Obtain the handle before calling `bllg_start_compute_mask()` so cancellation
 is enabled before the work is queued.
 
-`bllg_cancel()` waits for an active mask callback to finish and returns true when callback userdata
-can be released. If it is called from any mask callback while the target constraint also has an
-active callback, the function returns false instead of risking a callback-to-callback deadlock;
-callback userdata must then remain valid until the target callback returns.
+`bllg_cancel()` only requests cancellation; it does not wait for active work or callbacks to
+finish. Keep callback userdata valid until `bllg_wait_mask_ready()` reports completion or
+cancellation for the corresponding ticket.
 
 Cancellation is permanent for the associated constraint. Create a new constraint for subsequent
 work, or clone the constraint before cancellation if its current state must be preserved.
