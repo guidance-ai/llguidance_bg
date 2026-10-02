@@ -9,12 +9,16 @@ use std::{
     sync::Arc,
 };
 
-use crate::{constraint::MaskTicketId, BgConstraint, MaskCallback};
+use crate::{constraint::MaskTicketId, BgCancellationHandle, BgConstraint, MaskCallback};
 
 pub struct BllgConstraint {
     local_error: Option<String>,
     ff_tokens: Vec<LlgToken>,
     constraint: Option<BgConstraint>,
+}
+
+pub struct BllgCancellationHandle {
+    handle: BgCancellationHandle,
 }
 
 pub struct BllgConstraintMgr {
@@ -299,6 +303,55 @@ pub extern "C" fn bllg_start_compute_mask(
     cc.get_error_code()
 }
 
+/// Get a thread-safe cancellation handle for a constraint.
+/// Call this before bllg_start_compute_mask() so cancellation is enabled before work is queued.
+/// The returned handle remains valid after the constraint is freed and must be freed with
+/// bllg_free_cancellation_handle().
+/// Returns null on error (use bllg_get_error() to get the exact error).
+#[no_mangle]
+pub extern "C" fn bllg_get_cancellation_handle(
+    cc: &mut BllgConstraint,
+) -> *mut BllgCancellationHandle {
+    let result = match &cc.constraint {
+        Some(constraint) => constraint.cancellation_handle(),
+        None => return std::ptr::null_mut(),
+    };
+    match cc.save_error(result) {
+        Some(handle) => Box::into_raw(Box::new(BllgCancellationHandle { handle })),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Permanently cancel queued or active work for the associated constraint.
+/// This function is thread-safe and may run concurrently with mask computation.
+/// This function does not wait for active work or callbacks to finish.
+/// The handle must remain valid for the duration of this call and must not be freed concurrently.
+#[no_mangle]
+pub extern "C" fn bllg_cancel(handle: &BllgCancellationHandle) {
+    handle.handle.cancel();
+}
+
+/// Check whether cancellation has been requested.
+/// The handle must remain valid for the duration of this call and must not be freed concurrently.
+#[no_mangle]
+pub extern "C" fn bllg_is_cancelled(handle: &BllgCancellationHandle) -> bool {
+    handle.handle.is_cancelled()
+}
+
+/// Free a cancellation handle.
+/// # Safety
+/// - The handle must be null or returned by bllg_get_cancellation_handle().
+/// - The handle must not have been freed already.
+/// - No other thread may access the handle during this call.
+#[no_mangle]
+pub unsafe extern "C" fn bllg_free_cancellation_handle(handle: *mut BllgCancellationHandle) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
 /// Commit the token(s) sampled.
 /// If any of the tokens is invalid (according to constraint),
 /// the constraint will enter error state and never leave it.
@@ -441,6 +494,7 @@ pub unsafe extern "C" fn bllg_get_last_mask(
 /// Return any forced tokens in the current state.
 /// The returned pointer is valid until the next call to this function.
 /// Returns the number of tokens (which can be 0), or -1 on error (use bllg_get_error() to get the exact error).
+/// As in llguidance, cancellation produces an empty result; use bllg_is_cancelled() to distinguish it.
 /// # Safety
 /// Should be called only from C code.
 #[no_mangle]

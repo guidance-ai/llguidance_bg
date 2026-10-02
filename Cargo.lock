@@ -327,8 +327,8 @@ checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
 
 [[package]]
 name = "llguidance"
-version = "1.9.0"
-source = "git+https://github.com/guidance-ai/llguidance?rev=c05068ccf08b43abbe3d175f096066af8c6cd3ee#c05068ccf08b43abbe3d175f096066af8c6cd3ee"
+version = "1.9.1"
+source = "git+https://github.com/guidance-ai/llguidance?rev=f0971424ec072d3e4d4196bcc7f31a2f60527df9#f0971424ec072d3e4d4196bcc7f31a2f60527df9"
 dependencies = [
  "anyhow",
  "derivre",
@@ -623,8 +623,8 @@ dependencies = [
 
 [[package]]
 name = "toktrie"
-version = "1.9.0"
-source = "git+https://github.com/guidance-ai/llguidance?rev=c05068ccf08b43abbe3d175f096066af8c6cd3ee#c05068ccf08b43abbe3d175f096066af8c6cd3ee"
+version = "1.9.1"
+source = "git+https://github.com/guidance-ai/llguidance?rev=f0971424ec072d3e4d4196bcc7f31a2f60527df9#f0971424ec072d3e4d4196bcc7f31a2f60527df9"
 dependencies = [
  "anyhow",
  "bytemuck",

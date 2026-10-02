@@ -1,8 +1,10 @@
 #ifndef LLGUIDANCE_BG_CPP_H
 #define LLGUIDANCE_BG_CPP_H
 
+#include <cstring>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
