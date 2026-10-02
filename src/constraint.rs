@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use llguidance::{
     panic_utils,
     toktrie::{SimpleVob, TokenId},
-    TokenParser,
+    CancellationHandle, TokenParser,
 };
 
 struct ConstraintInner {
@@ -66,6 +66,21 @@ pub struct BgConstraint {
     state: Arc<ConstraintState>,
 }
 
+#[derive(Clone)]
+pub struct BgCancellationHandle {
+    cancellation: CancellationHandle,
+}
+
+impl BgCancellationHandle {
+    pub fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+}
+
 impl BgConstraint {
     pub fn new(thread_pool: Arc<rayon::ThreadPool>, parser: TokenParser) -> Self {
         BgConstraint {
@@ -99,6 +114,13 @@ impl BgConstraint {
         let parser = inner.parser.deep_clone();
         let thread_pool = Arc::clone(&self.state.thread_pool);
         Ok(Self::new(thread_pool, parser))
+    }
+
+    pub fn cancellation_handle(&self) -> Result<BgCancellationHandle> {
+        let mut inner = self.state.inner.lock().unwrap();
+        inner.check_error()?;
+        let cancellation = inner.parser.enable_cancellation();
+        Ok(BgCancellationHandle { cancellation })
     }
 
     fn with_inner<T>(&self, f: impl FnOnce(&mut ConstraintInner) -> Result<T>) -> Result<T> {
@@ -259,5 +281,158 @@ impl BgConstraint {
                 .as_ref()
                 .ok_or_else(|| anyhow!("no mask"))?))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llguidance::{api::TopLevelGrammar, toktrie::ApproximateTokEnv, ParserFactory};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+
+    fn constraint_with_pool(thread_pool: Arc<rayon::ThreadPool>) -> BgConstraint {
+        let tok_env = ApproximateTokEnv::single_byte_env();
+        let factory = ParserFactory::new_simple(&tok_env).unwrap();
+        let mut parser = factory
+            .create_parser(TopLevelGrammar::from_lark(r#"start: "a""#.to_string()))
+            .unwrap();
+        parser.start_without_prompt();
+        BgConstraint::new(thread_pool, parser)
+    }
+
+    fn constraint() -> BgConstraint {
+        constraint_with_pool(Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap(),
+        ))
+    }
+
+    struct RecordCallback(Arc<AtomicBool>);
+
+    impl MaskCallback for RecordCallback {
+        fn mask_ready(&self, _: &SimpleVob) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn cancellation_is_opt_in_and_permanent() {
+        let constraint = constraint();
+        let first = constraint.cancellation_handle().unwrap();
+        let second = constraint.cancellation_handle().unwrap();
+        let callback_called = Arc::new(AtomicBool::new(false));
+
+        first.cancel();
+
+        assert!(second.is_cancelled());
+        let ticket = constraint.start_compute_mask(RecordCallback(callback_called.clone()));
+        assert!(constraint
+            .wait_mask_ready(ticket, Duration::from_secs(1))
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+        assert!(!callback_called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn inherits_existing_parser_cancellation() {
+        let tok_env = ApproximateTokEnv::single_byte_env();
+        let factory = ParserFactory::new_simple(&tok_env).unwrap();
+        let mut parser = factory
+            .create_parser(TopLevelGrammar::from_lark(r#"start: "a""#.to_string()))
+            .unwrap();
+        parser.start_without_prompt();
+        let handle = parser.enable_cancellation();
+        let constraint = BgConstraint::new(
+            Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .build()
+                    .unwrap(),
+            ),
+            parser,
+        );
+
+        handle.cancel();
+
+        let ticket =
+            constraint.start_compute_mask(RecordCallback(Arc::new(AtomicBool::new(false))));
+        assert!(constraint
+            .wait_mask_ready(ticket, Duration::from_secs(1))
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+    }
+
+    #[test]
+    fn queued_computation_observes_cancellation() {
+        let thread_pool = Arc::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap(),
+        );
+        let constraint = constraint_with_pool(thread_pool.clone());
+        let handle = constraint.cancellation_handle().unwrap();
+        let callback_called = Arc::new(AtomicBool::new(false));
+        let (blocker_started_tx, blocker_started_rx) = mpsc::channel();
+        let (release_blocker_tx, release_blocker_rx) = mpsc::channel();
+
+        thread_pool.spawn(move || {
+            blocker_started_tx.send(()).unwrap();
+            release_blocker_rx.recv().unwrap();
+        });
+        blocker_started_rx.recv().unwrap();
+
+        let ticket = constraint.start_compute_mask(RecordCallback(callback_called.clone()));
+        handle.cancel();
+        release_blocker_tx.send(()).unwrap();
+
+        assert!(constraint
+            .wait_mask_ready(ticket, Duration::from_secs(1))
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+        assert!(!callback_called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn cancellation_handle_outlives_constraint() {
+        let handle = {
+            let constraint = constraint();
+            constraint.cancellation_handle().unwrap()
+        };
+
+        handle.cancel();
+        assert!(handle.is_cancelled());
+    }
+
+    #[test]
+    fn deep_clone_snapshots_cancellation_independently() {
+        let constraint = constraint();
+        let handle = constraint.cancellation_handle().unwrap();
+        let cloned = constraint.deep_clone().unwrap();
+
+        handle.cancel();
+
+        assert!(constraint.check_stop().is_err());
+        assert!(cloned.check_stop().is_ok());
+    }
+
+    #[test]
+    fn deep_clone_snapshots_requested_cancellation() {
+        let constraint = constraint();
+        let handle = constraint.cancellation_handle().unwrap();
+        handle.cancel();
+
+        let cloned = constraint.deep_clone().unwrap();
+
+        assert!(constraint.check_stop().is_err());
+        assert!(cloned.check_stop().is_err());
     }
 }
