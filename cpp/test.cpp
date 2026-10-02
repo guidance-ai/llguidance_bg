@@ -21,21 +21,29 @@ int main() {
     auto c2 = bllg_clone_constraint(constraint);
     auto c3 = bllg_clone_constraint(constraint);
     auto c4 = bllg_clone_constraint(constraint);
+    auto c5 = bllg_clone_constraint(constraint);
     auto cancellation2 = bllg_get_cancellation_handle(c2);
     auto cancellation3 = bllg_get_cancellation_handle(c3);
     auto cancellation4 = bllg_get_cancellation_handle(c4);
+    auto cancellation5 = bllg_get_cancellation_handle(c5);
     assert(cancellation2 != nullptr);
     assert(cancellation3 != nullptr);
     assert(cancellation4 != nullptr);
+    assert(cancellation5 != nullptr);
     bllg_free_constraint(constraint);
     bllg_cancel(cancellation2);
     const uint32_t *ff_tokens = nullptr;
     assert(bllg_compute_ff_tokens(c2, &ff_tokens) == -1);
     bllg_cancel(cancellation3);
     assert(bllg_start_compute_mask(c3, nullptr, nullptr) == -1);
+    bllg_cancel(cancellation5);
+    assert(bllg_clone_constraint(c5) == nullptr);
+    assert(std::string(bllg_get_error(c5)).find("operation cancelled") !=
+           std::string::npos);
     bllg_free_constraint(c2);
     bllg_free_constraint(c3);
     bllg_free_constraint(c4);
+    bllg_free_constraint(c5);
     assert(bllg_is_cancelled(cancellation2));
     assert(bllg_is_cancelled(cancellation3));
     bllg_cancel(cancellation4);
@@ -43,6 +51,7 @@ int main() {
     bllg_free_cancellation_handle(cancellation2);
     bllg_free_cancellation_handle(cancellation3);
     bllg_free_cancellation_handle(cancellation4);
+    bllg_free_cancellation_handle(cancellation5);
 
     std::string g2 = "{ foobar";
     std::string msg;

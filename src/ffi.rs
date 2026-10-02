@@ -310,15 +310,17 @@ pub extern "C" fn bllg_start_compute_mask(
 /// Call this before bllg_start_compute_mask() so cancellation is enabled before work is queued.
 /// The returned handle remains valid after the constraint is freed and must be freed with
 /// bllg_free_cancellation_handle().
-/// Returns null if the constraint is already in an error state.
-/// A null result does not modify the constraint.
+/// Returns null on error (use bllg_get_error() to get the exact error).
 #[no_mangle]
-pub extern "C" fn bllg_get_cancellation_handle(cc: &BllgConstraint) -> *mut BllgCancellationHandle {
-    match &cc.constraint {
-        Some(constraint) => match constraint.cancellation_handle() {
-            Ok(handle) => Box::into_raw(Box::new(BllgCancellationHandle { handle })),
-            Err(_) => std::ptr::null_mut(),
-        },
+pub extern "C" fn bllg_get_cancellation_handle(
+    cc: &mut BllgConstraint,
+) -> *mut BllgCancellationHandle {
+    let result = match &cc.constraint {
+        Some(constraint) => constraint.cancellation_handle(),
+        None => return std::ptr::null_mut(),
+    };
+    match cc.save_error(result) {
+        Some(handle) => Box::into_raw(Box::new(BllgCancellationHandle { handle })),
         None => std::ptr::null_mut(),
     }
 }
@@ -514,23 +516,24 @@ pub unsafe extern "C" fn bllg_compute_ff_tokens(
 
 /// Clone all the mutable state of the constraint.
 /// The cloned constraint will not share any mutexes with the current constraint.
-/// Returns a pointer to the cloned constraint, or null on error.
+/// Returns a pointer to the cloned constraint, or null on error (use bllg_get_error()
+/// on the original constraint to get the exact error).
 /// A cancelled constraint cannot be cloned; clone it before cancelling it.
 /// # Safety
 /// Should be called only from C code.
 #[no_mangle]
-pub unsafe extern "C" fn bllg_clone_constraint(cc: &BllgConstraint) -> *mut BllgConstraint {
-    if let Some(constraint) = &cc.constraint {
-        match constraint.deep_clone() {
-            Ok(cc) => Box::into_raw(Box::new(BllgConstraint {
-                local_error: None,
-                ff_tokens: vec![],
-                constraint: Some(cc),
-            })),
-            Err(_) => std::ptr::null_mut(),
-        }
-    } else {
-        std::ptr::null_mut()
+pub unsafe extern "C" fn bllg_clone_constraint(cc: &mut BllgConstraint) -> *mut BllgConstraint {
+    let result = match &cc.constraint {
+        Some(constraint) => constraint.deep_clone(),
+        None => return std::ptr::null_mut(),
+    };
+    match cc.save_error(result) {
+        Some(constraint) => Box::into_raw(Box::new(BllgConstraint {
+            local_error: None,
+            ff_tokens: vec![],
+            constraint: Some(constraint),
+        })),
+        None => std::ptr::null_mut(),
     }
 }
 
