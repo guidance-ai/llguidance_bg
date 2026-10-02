@@ -252,6 +252,8 @@ impl BgConstraint {
             .get()
             .is_some_and(CancellationHandle::is_cancelled)
         {
+            let inner = self.state.inner.lock().unwrap();
+            inner.check_error()?;
             bail!(llguidance::Cancelled);
         }
         Ok(self.start_compute_mask(cb))
@@ -302,7 +304,17 @@ impl BgConstraint {
 
     /// Return forced tokens while preserving cancellation and parser errors.
     pub fn try_compute_ff_tokens(&self) -> Result<Vec<TokenId>> {
-        self.with_inner(|inner| Ok(inner.parser.compute_ff_tokens()))
+        self.with_inner(|inner| {
+            let tokens = inner.parser.compute_ff_tokens();
+            if inner
+                .parser
+                .cancellation_handle()
+                .is_some_and(|handle| handle.is_cancelled())
+            {
+                bail!(llguidance::Cancelled);
+            }
+            Ok(tokens)
+        })
     }
 
     pub fn try_consume_tokens(&self, tokens: &[TokenId]) -> Result<usize> {
@@ -344,6 +356,7 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         mpsc,
     };
+    use std::thread;
 
     fn constraint_with_pool(thread_pool: Arc<rayon::ThreadPool>) -> BgConstraint {
         let tok_env = ApproximateTokEnv::single_byte_env();
@@ -369,6 +382,18 @@ mod tests {
     impl MaskCallback for RecordCallback {
         fn mask_ready(&self, _: &SimpleVob) {
             self.0.store(true, Ordering::Relaxed);
+        }
+    }
+
+    struct BlockingCallback {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl MaskCallback for BlockingCallback {
+        fn mask_ready(&self, _: &SimpleVob) {
+            self.entered.send(()).unwrap();
+            self.release.recv().unwrap();
         }
     }
 
@@ -469,6 +494,44 @@ mod tests {
             .to_string()
             .contains("operation cancelled"));
         assert!(!callback_called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn cancelled_start_waits_for_active_callback() {
+        let constraint = constraint();
+        let handle = constraint.cancellation_handle().unwrap();
+        let (callback_entered_tx, callback_entered_rx) = mpsc::channel();
+        let (release_callback_tx, release_callback_rx) = mpsc::channel();
+        let (start_attempted_tx, start_attempted_rx) = mpsc::channel();
+        let (start_done_tx, start_done_rx) = mpsc::channel();
+
+        constraint.start_compute_mask(BlockingCallback {
+            entered: callback_entered_tx,
+            release: release_callback_rx,
+        });
+        callback_entered_rx.recv().unwrap();
+        handle.cancel();
+
+        let start_constraint = constraint.clone_ref();
+        let start_thread = thread::spawn(move || {
+            start_attempted_tx.send(()).unwrap();
+            let result = start_constraint
+                .try_start_compute_mask(RecordCallback(Arc::new(AtomicBool::new(false))));
+            start_done_tx.send(result).unwrap();
+        });
+        start_attempted_rx.recv().unwrap();
+        assert!(start_done_rx
+            .recv_timeout(Duration::from_millis(20))
+            .is_err());
+
+        release_callback_tx.send(()).unwrap();
+        assert!(start_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("operation cancelled"));
+        start_thread.join().unwrap();
     }
 
     #[test]
